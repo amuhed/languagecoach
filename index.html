@@ -313,6 +313,7 @@ body {
 .mic-btn { background: var(--border); color: var(--text); }
 .mic-btn:hover { background: #d6d3d1; }
 .mic-btn.recording { background: var(--red); color: #fff; animation: pulse 1.5s infinite; }
+.mic-btn.speaking { background: var(--accent); color: #fff; }
 @keyframes pulse {
   0%, 100% { box-shadow: 0 0 0 0 rgba(220,38,38,0.3); }
   50% { box-shadow: 0 0 0 8px rgba(220,38,38,0); }
@@ -378,7 +379,10 @@ body {
 <!-- Chat Screen -->
 <div id="chatScreen" class="chat-screen hidden">
   <div class="chat-header">
-    <span class="lang-level" id="chatLangLevel"></span>
+    <div style="display:flex;align-items:center;gap:8px">
+      <button class="btn-ghost btn" id="backBtn" style="padding:8px;font-size:18px;line-height:1" title="Back to menu">&larr;</button>
+      <span class="lang-level" id="chatLangLevel"></span>
+    </div>
     <div style="display:flex;gap:8px">
       <button class="btn-ghost btn" id="suggestTopicBtn">Suggest topics</button>
       <button class="btn btn-danger" id="endSessionBtn" style="padding:8px 14px;font-size:13px">End session</button>
@@ -429,6 +433,7 @@ const sendBtn = $('#sendBtn');
 const micBtn = $('#micBtn');
 const suggestTopicBtn = $('#suggestTopicBtn');
 const endSessionBtn = $('#endSessionBtn');
+const backBtn = $('#backBtn');
 const chatFooter = $('#chatFooter');
 
 // ===================== Init =====================
@@ -491,10 +496,11 @@ function bindEvents() {
   chatInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   });
-  chatInput.addEventListener('input', autoResize);
+  chatInput.addEventListener('input', () => { stopSpeaking(); autoResize(); });
   micBtn.addEventListener('click', toggleMic);
   suggestTopicBtn.addEventListener('click', requestTopicSuggestions);
   endSessionBtn.addEventListener('click', endSession);
+  backBtn.addEventListener('click', goBack);
 }
 
 function selectLanguage(lang) {
@@ -528,6 +534,7 @@ function startSession() {
   state.messages = [];
   state.sessionStart = Date.now();
   state.sessionEnded = false;
+  delete voiceCache[state.language]; // Re-pick voice for new session
 
   // Update UI
   welcomeScreen.classList.add('hidden');
@@ -782,6 +789,14 @@ function endSession() {
   callClaude(buildSystemPrompt());
 }
 
+function goBack() {
+  stopSpeaking();
+  if (recognition) stopRecording();
+  chatScreen.classList.add('hidden');
+  welcomeScreen.classList.remove('hidden');
+  checkReturningUser();
+}
+
 function finalizeSession(sessionData) {
   const minutes = Math.round((Date.now() - state.sessionStart) / 60000);
   const p = state.profile;
@@ -826,6 +841,12 @@ let recognition = null;
 let isRecording = false;
 
 function toggleMic() {
+  // If Claude is speaking, stop it first
+  if (isSpeaking) {
+    stopSpeaking();
+    return;
+  }
+
   if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
     addMessage('system', 'Speech recognition is not supported in this browser. Please use Chrome.');
     return;
@@ -838,8 +859,8 @@ function toggleMic() {
 
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   recognition = new SpeechRecognition();
-  recognition.continuous = false;
-  recognition.interimResults = false;
+  recognition.continuous = true;
+  recognition.interimResults = true;
 
   const langMap = {
     french: 'fr-FR',
@@ -849,19 +870,41 @@ function toggleMic() {
   };
   recognition.lang = langMap[state.language] || 'fr-FR';
 
+  let silenceTimer = null;
+  const SILENCE_DELAY = 2500; // Wait 2.5s of silence before sending
+
   recognition.onstart = () => {
     isRecording = true;
     micBtn.classList.add('recording');
   };
 
   recognition.onresult = (event) => {
-    const text = event.results[0][0].transcript;
-    chatInput.value = text;
+    // Build full transcript from all results
+    let finalText = '';
+    let interimText = '';
+    for (let i = 0; i < event.results.length; i++) {
+      if (event.results[i].isFinal) {
+        finalText += event.results[i][0].transcript;
+      } else {
+        interimText += event.results[i][0].transcript;
+      }
+    }
+
+    // Show what's been captured so far in the input field
+    chatInput.value = finalText + interimText;
     autoResize();
-    sendMessage();
+
+    // Reset silence timer — user is still speaking
+    clearTimeout(silenceTimer);
+    silenceTimer = setTimeout(() => {
+      // Silence detected — stop and send
+      stopRecording();
+      if (chatInput.value.trim()) sendMessage();
+    }, SILENCE_DELAY);
   };
 
   recognition.onerror = (event) => {
+    clearTimeout(silenceTimer);
     if (event.error !== 'no-speech') {
       addMessage('system', `Mic error: ${event.error}`);
     }
@@ -869,7 +912,15 @@ function toggleMic() {
   };
 
   recognition.onend = () => {
-    stopRecording();
+    clearTimeout(silenceTimer);
+    // If there's text captured, send it
+    if (isRecording && chatInput.value.trim()) {
+      isRecording = false;
+      micBtn.classList.remove('recording');
+      sendMessage();
+    } else {
+      stopRecording();
+    }
   };
 
   recognition.start();
@@ -886,45 +937,68 @@ function stopRecording() {
 
 // ===================== Speech Synthesis =====================
 
-// Preferred female voices per language on macOS (premium/enhanced voices)
+// Preferred voices per language, in priority order (best first)
+// These are real native-speaker voices on macOS, not the novelty ones
 const preferredVoices = {
-  french: ['Amelie', 'Audrey', 'Aurelie', 'Marie'],
-  italian: ['Alice', 'Federica', 'Paola'],
-  spanish: ['Paulina', 'Monica', 'Marisol', 'Jimena'],
+  french: ['Aurelie', 'Audrey', 'Amelie', 'Marie', 'Thomas'],
+  italian: ['Federica', 'Paola', 'Alice', 'Luca'],
+  spanish: ['Paulina', 'Mónica', 'Monica', 'Marisol', 'Jimena', 'Jorge'],
   portuguese: ['Luciana', 'Fernanda', 'Raquel']
 };
 
-function pickBestVoice(voices, language, targetLang) {
+// Novelty/joke voices to always skip
+const blockedVoices = /Grandma|Grandpa|Eddy|Flo|Reed|Rocko|Sandy|Shelley|Trinoids|Superstar|Bubbles|Cellos|Zarvox|Bahh|Boing/i;
+
+// Cache the selected voice per language so it doesn't change mid-session
+const voiceCache = {};
+
+function pickBestVoice(language, targetLang) {
+  // Return cached voice if we already picked one for this language
+  if (voiceCache[language]) return voiceCache[language];
+
+  const voices = speechSynthesis.getVoices();
   const preferred = preferredVoices[language] || [];
   const langCode = targetLang.split('-')[0];
 
-  // Filter to voices that match the language
-  const matching = voices.filter(v => v.lang === targetLang || v.lang.startsWith(langCode));
+  // Filter to voices that match the language and aren't novelty voices
+  const matching = voices.filter(v =>
+    (v.lang === targetLang || v.lang.startsWith(langCode + '-') || v.lang.startsWith(langCode + '_')) &&
+    !blockedVoices.test(v.name)
+  );
   if (matching.length === 0) return null;
 
-  // 1. Try preferred female voice names (premium macOS voices)
+  let picked = null;
+
+  // 1. Try preferred voice names in priority order
   for (const name of preferred) {
     const v = matching.find(v => v.name.includes(name));
-    if (v) return v;
+    if (v) { picked = v; break; }
   }
 
   // 2. Try any voice with "Premium" or "Enhanced" in the name
-  const premium = matching.find(v => /premium|enhanced/i.test(v.name));
-  if (premium) return premium;
+  if (!picked) picked = matching.find(v => /premium|enhanced/i.test(v.name));
 
-  // 3. Try any female-sounding voice (heuristic: common female name patterns)
-  const femaleHint = matching.find(v => /female|woman|féminin/i.test(v.name));
-  if (femaleHint) return femaleHint;
+  // 3. Fall back to first non-blocked matching voice
+  if (!picked) picked = matching[0];
 
-  // 4. Fall back to first matching voice
-  return matching[0];
+  // Cache it
+  if (picked) voiceCache[language] = picked;
+  return picked;
+}
+
+let isSpeaking = false;
+
+function stopSpeaking() {
+  if ('speechSynthesis' in window) speechSynthesis.cancel();
+  isSpeaking = false;
+  micBtn.classList.remove('speaking');
 }
 
 function speak(text) {
   if (!('speechSynthesis' in window)) return;
 
   // Cancel any ongoing speech
-  speechSynthesis.cancel();
+  stopSpeaking();
 
   const langMap = {
     french: 'fr-FR',
@@ -933,13 +1007,29 @@ function speak(text) {
     portuguese: 'pt-BR'
   };
 
-  const utterance = new SpeechSynthesisUtterance(text);
+  // Strip emojis, special characters, and markdown-style formatting before speaking
+  const cleanText = text
+    .replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '')
+    .replace(/[*_~`#>]/g, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+  if (!cleanText) return;
+
+  const utterance = new SpeechSynthesisUtterance(cleanText);
   utterance.lang = langMap[state.language] || 'fr-FR';
   utterance.rate = state.level === 'A1' ? 0.8 : state.level === 'A2' ? 0.85 : 0.92;
 
-  const voices = speechSynthesis.getVoices();
-  const voice = pickBestVoice(voices, state.language, langMap[state.language]);
+  const voice = pickBestVoice(state.language, langMap[state.language]);
   if (voice) utterance.voice = voice;
+
+  utterance.onstart = () => {
+    isSpeaking = true;
+    micBtn.classList.add('speaking');
+  };
+  utterance.onend = () => {
+    isSpeaking = false;
+    micBtn.classList.remove('speaking');
+  };
 
   speechSynthesis.speak(utterance);
 }
