@@ -6,9 +6,9 @@ Designed for educated adults who want to discuss real topics — current affairs
 
 ## Use it online
 
-**[amuhed.github.io/languagecoach](https://amuhed.github.io/languagecoach)**
+**[languagecoach.vercel.app](https://languagecoach.vercel.app)**
 
-Open the link in Chrome, enter your Claude API key, and start talking.
+Open the link, choose your language and level, and start talking. No API key or account needed.
 
 ## Run locally
 
@@ -26,19 +26,37 @@ If you prefer to run it on your own machine:
 ## Features
 
 - **Natural conversation** — Claude adapts to your CEFR level (A1–C1) and follows your lead on topics
-- **Voice input** — speak using your microphone via Web Speech API
+- **Voice input** — speak using your microphone (Chrome and Android)
 - **Voice output** — hear Claude's responses via browser speech synthesis
+- **Interrupt anytime** — click mic or start typing to stop Claude mid-sentence
 - **Subtle corrections** — grammar and vocabulary errors corrected naturally within conversation
 - **Session memory** — picks up where you left off, tracks recurring errors
 - **End-of-session feedback** — brief English summary of patterns to watch and things you did well
+- **No setup for users** — hosted version proxies the API, no key needed
 
-## Requirements
+## Browser Support
 
-- Google Chrome (for Web Speech API support)
-- A Claude API key from [Anthropic](https://console.anthropic.com/)
+| Feature | Chrome desktop | Chrome Android | iOS Safari |
+|---|---|---|---|
+| Conversation | Yes | Yes | Yes |
+| Text input | Yes | Yes | Yes |
+| Voice input (mic) | Yes | Yes | No |
+| Voice output | Yes | Yes | Partial |
+
+Voice input requires Chrome due to Web Speech API support. On iOS, the app works in text-only mode.
 
 ## Privacy
 
-- Your API key is stored only in your browser's localStorage
-- No data is sent anywhere except the Claude API
-- No analytics, no tracking, no accounts
+- No login, no account, no analytics, no tracking
+- Conversation data stays in your browser's localStorage
+- Hosted version routes through a Vercel proxy — no API keys stored in the browser
+- Local version: your API key is stored only in localStorage
+
+## Deploy your own
+
+1. Fork this repo
+2. Import to [Vercel](https://vercel.com)
+3. Add environment variable: `ANTHROPIC_API_KEY` = your key from [Anthropic](https://console.anthropic.com/)
+4. Deploy
+
+Set a monthly spending limit at [console.anthropic.com/settings/limits](https://console.anthropic.com/settings/limits) to control costs.
