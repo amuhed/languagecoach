@@ -437,9 +437,14 @@ const backBtn = $('#backBtn');
 const chatFooter = $('#chatFooter');
 
 // ===================== Init =====================
+// Detect if we're hosted on Vercel (proxy available) or running locally
+const hasProxy = window.location.hostname !== 'localhost' &&
+                 window.location.hostname !== '127.0.0.1' &&
+                 window.location.protocol !== 'file:';
+
 function init() {
   state.apiKey = localStorage.getItem('languageCoach_apiKey');
-  if (!state.apiKey) {
+  if (!state.apiKey && !hasProxy) {
     apiKeyModal.classList.remove('hidden');
   }
   checkReturningUser();
@@ -526,7 +531,7 @@ function autoResize() {
 
 // ===================== Session =====================
 function startSession() {
-  if (!state.apiKey) {
+  if (!state.apiKey && !hasProxy) {
     apiKeyModal.classList.remove('hidden');
     return;
   }
@@ -687,14 +692,18 @@ async function callClaude(systemPrompt) {
   scrollToBottom();
 
   try {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
+    const useProxy = hasProxy && !state.apiKey;
+    const url = useProxy ? '/api/chat' : 'https://api.anthropic.com/v1/messages';
+    const headers = { 'Content-Type': 'application/json' };
+    if (!useProxy) {
+      headers['x-api-key'] = state.apiKey;
+      headers['anthropic-version'] = '2023-06-01';
+      headers['anthropic-dangerous-direct-browser-access'] = 'true';
+    }
+
+    const response = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': state.apiKey,
-        'anthropic-version': '2023-06-01',
-        'anthropic-dangerous-direct-browser-access': 'true'
-      },
+      headers,
       body: JSON.stringify({
         model: 'claude-sonnet-4-6',
         max_tokens: 1024,
