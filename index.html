@@ -338,6 +338,17 @@ body {
 </head>
 <body>
 
+<!-- Password Modal (for hosted version) -->
+<div id="passwordModal" class="modal-overlay hidden">
+  <div class="modal">
+    <h2>Enter password</h2>
+    <p>This app is password-protected.</p>
+    <input type="password" id="passwordInput" placeholder="Password" autocomplete="off">
+    <div id="passwordError" style="color:var(--red);font-size:13px;margin-bottom:12px" class="hidden">Incorrect password. Try again.</div>
+    <button class="btn btn-primary" id="savePassword" style="width:100%">Continue</button>
+  </div>
+</div>
+
 <!-- API Key Modal -->
 <div id="apiKeyModal" class="modal-overlay hidden">
   <div class="modal">
@@ -411,6 +422,7 @@ let state = {
   language: null,
   level: null,
   profile: null,
+  appPassword: null,
   messages: [],       // Claude conversation messages
   sessionStart: null,
   sessionEnded: false
@@ -418,6 +430,10 @@ let state = {
 
 // ===================== DOM refs =====================
 const $ = (sel) => document.querySelector(sel);
+const passwordModal = $('#passwordModal');
+const passwordInput = $('#passwordInput');
+const passwordError = $('#passwordError');
+const savePasswordBtn = $('#savePassword');
 const apiKeyModal = $('#apiKeyModal');
 const apiKeyInput = $('#apiKeyInput');
 const saveApiKeyBtn = $('#saveApiKey');
@@ -444,11 +460,45 @@ const hasProxy = window.location.hostname !== 'localhost' &&
 
 function init() {
   state.apiKey = localStorage.getItem('languageCoach_apiKey');
-  if (!state.apiKey && !hasProxy) {
+  state.appPassword = localStorage.getItem('languageCoach_appPassword');
+
+  if (hasProxy && !state.appPassword) {
+    // Hosted version: need password
+    passwordModal.classList.remove('hidden');
+    welcomeScreen.classList.add('hidden');
+  } else if (!hasProxy && !state.apiKey) {
+    // Local version: need API key
     apiKeyModal.classList.remove('hidden');
   }
   checkReturningUser();
   bindEvents();
+}
+
+async function validatePassword() {
+  const pw = passwordInput.value;
+  if (!pw) return;
+  passwordError.classList.add('hidden');
+
+  // Test the password against the server
+  try {
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-app-password': pw },
+      body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 1, messages: [{ role: 'user', content: 'test' }] })
+    });
+    if (res.status === 401) {
+      passwordError.classList.remove('hidden');
+      return;
+    }
+    // Password accepted
+    state.appPassword = pw;
+    localStorage.setItem('languageCoach_appPassword', pw);
+    passwordModal.classList.add('hidden');
+    welcomeScreen.classList.remove('hidden');
+  } catch (e) {
+    passwordError.textContent = 'Could not connect to server.';
+    passwordError.classList.remove('hidden');
+  }
 }
 
 function checkReturningUser() {
@@ -478,6 +528,12 @@ function checkReturningUser() {
 
 // ===================== Events =====================
 function bindEvents() {
+  // Password validation (hosted version)
+  savePasswordBtn.addEventListener('click', validatePassword);
+  passwordInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') validatePassword();
+  });
+
   saveApiKeyBtn.addEventListener('click', () => {
     const key = apiKeyInput.value.trim();
     if (!key) return;
@@ -695,7 +751,9 @@ async function callClaude(systemPrompt) {
     const useProxy = hasProxy && !state.apiKey;
     const url = useProxy ? '/api/chat' : 'https://api.anthropic.com/v1/messages';
     const headers = { 'Content-Type': 'application/json' };
-    if (!useProxy) {
+    if (useProxy) {
+      if (state.appPassword) headers['x-app-password'] = state.appPassword;
+    } else {
       headers['x-api-key'] = state.apiKey;
       headers['anthropic-version'] = '2023-06-01';
       headers['anthropic-dangerous-direct-browser-access'] = 'true';
@@ -714,7 +772,12 @@ async function callClaude(systemPrompt) {
 
     if (!response.ok) {
       const err = await response.json().catch(() => ({}));
-      if (response.status === 401) {
+      if (response.status === 401 && useProxy) {
+        localStorage.removeItem('languageCoach_appPassword');
+        state.appPassword = null;
+        addMessage('system', 'Invalid password. Please re-enter.');
+        passwordModal.classList.remove('hidden');
+      } else if (response.status === 401) {
         localStorage.removeItem('languageCoach_apiKey');
         state.apiKey = null;
         addMessage('system', 'Invalid API key. Please re-enter your key.');

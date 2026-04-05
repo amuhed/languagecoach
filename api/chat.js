@@ -2,12 +2,21 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-app-password');
     return res.status(200).end();
   }
 
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  // Check password if one is configured
+  const appPassword = process.env.APP_PASSWORD;
+  if (appPassword) {
+    const provided = req.headers['x-app-password'];
+    if (provided !== appPassword) {
+      return res.status(401).json({ error: 'Invalid password' });
+    }
   }
 
   const apiKey = process.env.ANTHROPIC_API_KEY;
